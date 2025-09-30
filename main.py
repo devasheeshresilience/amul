@@ -20,11 +20,14 @@ import json
 import logging
 import os
 import time
+import random
 from pathlib import Path
 from typing import Dict, Any
 
 from stock_checker import parse_products, detect_in_stock_transitions, StockState
 from notifier import TelegramNotifier
+from fetcher import fetch_payload
+from persistent_state import PersistentStockState
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -33,52 +36,43 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 # A fallback sample payload (trimmed). Replace with real API response or a file path.
-SAMPLE_PAYLOAD: Dict[str, Any] = {
-    "data": [
-        {
-            "_id": "6636020d5c0420e92d79ebdd",
-            "name": "Amul High Protein Paneer, 400 g | Pack of 2",
-            "available": 1,
-            "inventory_quantity": 1079,
-        }
-    ]
-}
-
-
-def load_payload() -> Dict[str, Any]:
-    path = os.getenv("PAYLOAD_FILE")
-    if path:
-        p = Path(path)
-        if p.is_file():
-            try:
-                return json.loads(p.read_text(encoding="utf-8"))
-            except Exception as e:  # pragma: no cover - file errors
-                logger.error("Failed to read payload file %s: %s", path, e)
-    return SAMPLE_PAYLOAD
+SAMPLE_PAYLOAD: Dict[str, Any] = {"data": []}  # retained for reference; fetcher handles fallback
 
 
 def main() -> None:
     interval = int(os.getenv("POLL_INTERVAL", "60"))
     notifier = TelegramNotifier()
-    state = StockState()
+    # In-memory state (per run) plus persistent state across restarts
+    volatile_state = StockState()
+    persistent_state = PersistentStockState()
 
     logger.info("Starting stock monitor loop (interval=%ss)", interval)
     while True:
-        payload = load_payload()
+        payload = fetch_payload()
         products = parse_products(payload)
-        newly_available = detect_in_stock_transitions(products, state)
+        newly_available = detect_in_stock_transitions(products, volatile_state)
 
+        # Persist states and only alert on transitions per persistent store as well
+        final_alerts = []
         for p in newly_available:
+            changed_persist, prev = persistent_state.status_changed(p.product_id, p.in_stock)
+            if changed_persist and p.in_stock:
+                final_alerts.append(p)
+
+        for p in final_alerts:
             msg = (
-                f"<b>{p.name}</b> just came <b>IN STOCK</b>!\n"
-                f"Inventory: {p.inventory_quantity if p.inventory_quantity is not None else 'unknown'}"
+                f"<b>{p.name}</b> just came <b>IN STOCK</b>!"\
+                f"\nInventory: {p.inventory_quantity if p.inventory_quantity is not None else 'unknown'}"\
+                f"\nProduct ID: {p.product_id}"
             )
             notifier.send(msg)
 
         logger.debug(
-            "Cycle complete: products=%d newly_available=%d", len(products), len(newly_available)
+            "Cycle complete: products=%d in_memory_new=%d persistent_alerts=%d", len(products), len(newly_available), len(final_alerts)
         )
-        time.sleep(interval)
+        # Add small jitter to avoid thundering herd if multiple instances
+        jitter = random.uniform(0, min(5, interval * 0.2))
+        time.sleep(interval + jitter)
 
 
 if __name__ == "__main__":  # pragma: no cover

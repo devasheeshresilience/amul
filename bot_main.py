@@ -45,6 +45,7 @@ from telegram.ext import (
 )
 
 from stock_checker import parse_products
+from fetcher import fetch_payload
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -55,28 +56,26 @@ logger = logging.getLogger("bot")
 STATE_FILE = Path("user_state.json")
 
 # ---------- Data Loading (reuse logic similar to main) ----------
-SAMPLE_PAYLOAD: Dict[str, Any] = {
-    "data": [
-        {
-            "_id": "6636020d5c0420e92d79ebdd",
-            "name": "Amul High Protein Paneer, 400 g | Pack of 2",
-            "available": 1,
-            "inventory_quantity": 1079,
-        }
-    ]
-}
+SAMPLE_PAYLOAD: Dict[str, Any] = {"data": []}
+
+PINCODE_MAP_FILE = Path("pincode_products.json")  # optional mapping file structure: {"122001": ["product_id1", ...]}
+
+_PINCODE_CACHE: Dict[str, set[str]] | None = None
 
 
-def load_payload() -> Dict[str, Any]:
-    path = os.getenv("PAYLOAD_FILE")
-    if path:
-        p = Path(path)
-        if p.is_file():
-            try:
-                return json.loads(p.read_text(encoding="utf-8"))
-            except Exception as e:  # pragma: no cover
-                logger.error("Failed to read payload file %s: %s", path, e)
-    return SAMPLE_PAYLOAD
+def _load_pincode_mapping() -> Dict[str, set[str]]:
+    global _PINCODE_CACHE
+    if _PINCODE_CACHE is not None:
+        return _PINCODE_CACHE
+    if PINCODE_MAP_FILE.is_file():
+        try:
+            raw = json.loads(PINCODE_MAP_FILE.read_text("utf-8"))
+            _PINCODE_CACHE = {k: set(v) for k, v in raw.items() if isinstance(v, list)}
+            return _PINCODE_CACHE
+        except Exception as e:  # pragma: no cover
+            logger.warning("Failed to load pincode mapping: %s", e)
+    _PINCODE_CACHE = {}
+    return _PINCODE_CACHE
 
 
 # ---------- State Persistence ----------
@@ -132,15 +131,18 @@ store = UserStateStore(STATE_FILE)
 PINCODE_REGEX = re.compile(r"^\d{4,6}$")
 
 
-def product_available_for_pincode(_product_raw: Dict[str, Any], _pincode: str) -> bool:
-    """Placeholder filtering—always returns True.
+def product_available_for_pincode(product_raw: Dict[str, Any], pincode: str) -> bool:
+    """Filtering using optional pincode mapping file.
 
-    Extend this with real mapping logic when available. For example:
-    - Query API endpoint with pincode
-    - Check product's location arrays vs pincode region mapping
-    - Maintain a mapping file: {"122001": ["product_id1", ...]}
+    Behavior:
+    - If mapping file present and contains pincode -> restrict to product IDs listed.
+    - If no mapping or pincode not in mapping, allow all (fallback True).
     """
-    return True
+    mapping = _load_pincode_mapping()
+    if not mapping or pincode not in mapping:
+        return True
+    pid = str(product_raw.get("_id"))
+    return pid in mapping[pincode]
 
 
 def format_products_list(products) -> str:
@@ -206,7 +208,7 @@ async def send_availability(chat_id: int, context: ContextTypes.DEFAULT_TYPE, si
         if not silent:
             await context.bot.send_message(chat_id, "No pincode set. Send your pincode to begin.")
         return
-    payload = load_payload()
+    payload = fetch_payload()
     products = parse_products(payload)
     filtered = [p for p in products if p.in_stock and product_available_for_pincode(p.raw, pincode)]
     message = format_products_list(filtered)

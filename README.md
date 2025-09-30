@@ -14,6 +14,8 @@ Backend service that monitors product stock availability from Amul's product API
 ```
 ├── main.py              # Entrypoint with polling loop
 ├── bot_main.py          # Interactive Telegram bot that asks for pincode
+├── fetcher.py           # Live/file fallback fetching with retries
+├── persistent_state.py  # JSON-backed persistent stock status
 ├── stock_checker.py     # Parsing & stock transition logic
 ├── notifier.py          # Telegram notification helper
 ├── requirements.txt     # Dependencies
@@ -33,6 +35,9 @@ Backend service that monitors product stock availability from Amul's product API
 | `POLL_INTERVAL` | Seconds between checks | `60` |
 | `PAYLOAD_FILE` | Optional path to JSON file containing latest API response | (uses sample) |
 | `LOG_LEVEL` | Logging level | `INFO` |
+| `API_ENDPOINT` | If set, use live HTTP fetch (GET) | (unset) |
+| `FETCH_TIMEOUT` | Seconds per HTTP request | `15` |
+| `FETCH_RETRIES` | Additional retry attempts | `2` |
 
 Additional (interactive bot) notes: `bot_main.py` does not need `TELEGRAM_CHAT_ID` (it replies to users directly) unless you want to broadcast messages.
 
@@ -88,6 +93,15 @@ Workflow:
 Pincode Filtering Extension:
 Modify `product_available_for_pincode` in `bot_main.py` to implement real logic (e.g., mapping pincode -> serviceable product IDs).
 
+You can optionally create a `pincode_products.json` file:
+```json
+{
+   "122001": ["6636020d5c0420e92d79ebdd"],
+   "560001": ["product_id_a", "product_id_b"]
+}
+```
+If present, the bot and filtering will restrict results for those pincodes.
+
 ## Railway Deployment
 1. Push this repo to GitHub.
 2. In Railway: New Project -> Deploy from GitHub Repo.
@@ -112,6 +126,14 @@ def fetch_live():
 ```
 Then replace `load_payload()` contents with `return fetch_live()`.
 Add `requests` to `requirements.txt`.
+
+This project already includes `fetcher.py` which will use `API_ENDPOINT` automatically if set.
+
+### Persistent State
+`persistent_state.py` stores last known stock status in `stock_state.json` so restarts won't re-alert unless a new transition occurs.
+
+### Polling Jitter
+`main.py` adds a small random delay each cycle to reduce synchronized calls when multiple instances run.
 
 ## Extending
 - Add persistence (e.g., Redis or simple JSON file) to retain state across restarts.
