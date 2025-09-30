@@ -13,6 +13,7 @@ Backend service that monitors product stock availability from Amul's product API
 ## Project Structure
 ```
 ├── main.py              # Entrypoint with polling loop
+├── bot_main.py          # Interactive Telegram bot that asks for pincode
 ├── stock_checker.py     # Parsing & stock transition logic
 ├── notifier.py          # Telegram notification helper
 ├── requirements.txt     # Dependencies
@@ -32,6 +33,8 @@ Backend service that monitors product stock availability from Amul's product API
 | `POLL_INTERVAL` | Seconds between checks | `60` |
 | `PAYLOAD_FILE` | Optional path to JSON file containing latest API response | (uses sample) |
 | `LOG_LEVEL` | Logging level | `INFO` |
+
+Additional (interactive bot) notes: `bot_main.py` does not need `TELEGRAM_CHAT_ID` (it replies to users directly) unless you want to broadcast messages.
 
 ## How It Decides In-Stock
 A product is considered in stock if:
@@ -69,6 +72,21 @@ Update the file contents between cycles (e.g. via another script) and when a pro
 3. Obtain chat ID:
    - Easiest: send a message to the bot, then call `https://api.telegram.org/bot<token>/getUpdates` in a browser and read the `chat.id`.
 4. Set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`.
+
+### Interactive Bot (Pincode Flow)
+You can run an interactive bot that asks each user for their pincode and lists currently in-stock products:
+```powershell
+python bot_main.py
+```
+Workflow:
+1. User sends /start
+2. Bot asks for pincode (4–6 digits)
+3. User sends pincode
+4. Bot responds with in-stock products (placeholder: all in-stock; extend logic for geo-filtering)
+5. User can /check to re-check, /subscribe to get updates every 10 minutes, /unsubscribe to stop.
+
+Pincode Filtering Extension:
+Modify `product_available_for_pincode` in `bot_main.py` to implement real logic (e.g., mapping pincode -> serviceable product IDs).
 
 ## Railway Deployment
 1. Push this repo to GitHub.
